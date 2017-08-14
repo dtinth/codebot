@@ -2,6 +2,7 @@ const admZipPath = require.resolve('adm-zip')
 const Module = require('module')
 const util = require('util')
 
+// Ugly hack to make `clojurescript` npm module work in webtask.io
 Module._resolveFilename = (original => function (request, requester) {
   if (request === 'adm-zip') {
     return admZipPath
