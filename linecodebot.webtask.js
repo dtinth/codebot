@@ -1,6 +1,5 @@
 const admZipPath = require.resolve('adm-zip')
 const Module = require('module')
-const util = require('util')
 
 // Ugly hack to make `clojurescript` npm module work in webtask.io
 Module._resolveFilename = (original => function (request, requester) {
@@ -10,9 +9,32 @@ Module._resolveFilename = (original => function (request, requester) {
     return original.apply(this, arguments)
   }
 })(Module._resolveFilename)
+const cljs = require('clojurescript')
 
 const axios = require('axios')
-const cljs = require('clojurescript')
+const parinfer = require('parinfer')
+
+function formatCode (code) {
+  try {
+    try {
+      cljs.context.cljs.reader.read_string(code)
+    } catch (e) {
+      if (!/EOF while reading/.test(e.message)) throw e
+      const inferredCode = parinfer.indentMode(code).text
+      const oldLines = code.split('\n')
+      const newLines = inferredCode.split('\n')
+      if (
+        oldLines.length === newLines.length &&
+        newLines.every((to, i) => to.trim().startsWith(oldLines[i].trim()))
+      ) {
+        return inferredCode
+      }
+    }
+  } catch (e) {
+    return code
+  }
+  return code
+}
 
 module.exports = function (context, callback) {
   Promise.all(context.body.events.map(processEvent))
@@ -33,9 +55,10 @@ module.exports = function (context, callback) {
     return Promise.resolve(processMessage(event.message))
       .catch(e => `Error: ${e}`)
       .then(m => {
+        const ms = typeof m === 'string' ? [ m ] : m
         const data = {
           replyToken,
-          messages: [ { type: 'text', text: m } ]
+          messages: ms.map(msg => ({ type: 'text', text: String(msg) }))
         }
         return axios.post('https://api.line.me/v2/bot/message/reply', data, {
           headers: {
@@ -53,26 +76,41 @@ module.exports = function (context, callback) {
       if (message.type !== 'text') {
         return Promise.resolve('Sorry, I only process text messages...')
       }
-      const out = [ ]
-      const origLog = console.log
-      const origErr = console.error
-      console.log = function () {
-        out.push(util.format.apply(util, arguments))
-      }
-      console.error = function () {
-        out.push(util.format.apply(util, arguments))
-      }
-      try {
-        const text = message.text
-        const ctx = cljs.newContext()
-        const res = cljs.eval(text, ctx)
-        const str = cljs.eval('pr-str', ctx)(res)
-        out.push(str)
-      } finally {
-        console.log = origLog
-        console.error = origErr
-      }
-      return Promise.resolve(out.join('\n'))
+      const originalCode = message.text
+      const code = formatCode(originalCode)
+      return axios.get('https://dtinth.lib.id/cljs@dev/?code=' + encodeURIComponent(code))
+      .then(
+        resp => {
+          const out = [ ]
+          if (originalCode !== code) {
+            out.push(
+              String.fromCodePoint(0x100085) + ' ' +
+              (
+                code.trim().includes('\n')
+                ? 'Auto-closing parens based on indentation (parinfer)'
+                : 'Auto-closing parens'
+              )
+            )
+          }
+          out.push(
+            String.fromCodePoint(0x10008D) + ' ' +
+            resp.data
+          )
+          return out
+        },
+        e => {
+          if (
+            e.response &&
+            e.response.data &&
+            e.response.data.error &&
+            e.response.data.error.type &&
+            e.response.data.error.message
+          ) {
+            return `${String.fromCodePoint(0x10007E)} [${e.response.status}] ${e.response.data.error.type}: ${e.response.data.error.message}`
+          }
+          return `${String.fromCodePoint(0x10007D)} ${e}`
+        }
+      )
     } catch (e) {
       return Promise.reject(e)
     }
