@@ -61,6 +61,8 @@ app.post('/', function (req, res) {
         Promise.all(entry.messaging.map(event => {
           if (event.message) {
             return receivedMessage(event, sender)
+          } else if (event.postback) {
+            return receivedPostback(event, sender)
           } else {
             console.log('Webhook received unknown event: ', event)
           }
@@ -88,6 +90,17 @@ function receivedMessage (event, sender) {
       .then(result => {
         return sender.send(senderID, result)
       })
+  } else {
+    console.log('Unknown message', event)
+  }
+}
+
+function receivedPostback (event, sender) {
+  var senderID = event.sender.id
+  var postback = event.postback
+  if (postback.payload === 'help') {
+    const result = 'Send me some ClojureScript code...\nFor example, try:\n\n(+ 1 2 3)'
+    return sender.send(senderID, result)
   } else {
     console.log('Unknown message', event)
   }
@@ -141,7 +154,7 @@ function processMessage (messageText) {
           )
         }
         out.push(
-          '😁 ' +
+          '😁\n```\n' +
           resp.data
         )
         return out
